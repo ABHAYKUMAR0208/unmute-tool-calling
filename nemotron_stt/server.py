@@ -37,6 +37,15 @@ MIN_SPEECH_MS = float(os.environ.get("NEMOTRON_MIN_SPEECH_MS", "160"))
 VAD_THRESHOLD = float(os.environ.get("NEMOTRON_VAD_THRESHOLD", "0.5"))
 MAX_SESSIONS = int(os.environ.get("NEMOTRON_MAX_SESSIONS", "8"))
 PORT = int(os.environ.get("NEMOTRON_PORT", "8090"))
+# Loopback only: the backend always reaches this over ws://localhost:8090
+# (see unmute/kyutai_constants.py), so this never needs to be reachable from
+# outside the pod. Binding 0.0.0.0 made RunPod's proxy auto-expose it
+# publicly, which is what was producing the periodic 426 "Upgrade Required"
+# log lines (external probes/health-checks hitting the port with plain HTTP,
+# not real call traffic — real traffic is loopback and would never surface
+# as a 426). Override with NEMOTRON_HOST if you have a real reason to bind
+# wider (e.g. running the backend on a different host/container).
+HOST = os.environ.get("NEMOTRON_HOST", "127.0.0.1")
 
 MODEL: NemotronModel | None = None
 active_sessions = 0
@@ -99,8 +108,8 @@ async def handle(ws: ServerConnection) -> None:
 async def main() -> None:
     global MODEL
     MODEL = await asyncio.to_thread(NemotronModel, MODEL_NAME, CHUNK_MS)
-    async with serve(handle, "0.0.0.0", PORT, max_size=None, ping_interval=20, ping_timeout=20):
-        logger.info("Nemotron STT listening on ws://0.0.0.0:%d%s", PORT, PATH)
+    async with serve(handle, HOST, PORT, max_size=None, ping_interval=20, ping_timeout=20):
+        logger.info("Nemotron STT listening on ws://%s:%d%s", HOST, PORT, PATH)
         await asyncio.get_running_loop().create_future()
 
 
