@@ -1,0 +1,6 @@
+# NeMo from main, as the model card asks (needs NeMo 25.11 or newer).
+nemo_toolkit[asr] @ git+https://github.com/NVIDIA/NeMo.git@main
+silero-vad>=5.1
+msgpack>=1.0
+websockets>=13
+scipy
