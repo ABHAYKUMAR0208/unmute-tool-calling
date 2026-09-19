@@ -19,9 +19,13 @@ import asyncio
 import logging
 import os
 
+import json
+
 import msgpack
 from websockets.asyncio.server import ServerConnection, serve
+from websockets.datastructures import Headers
 from websockets.exceptions import ConnectionClosed
+from websockets.http11 import Request, Response
 
 from nemotron_stt.engine import NemotronModel
 from nemotron_stt.session import PauseTracker, SttSession
@@ -53,6 +57,29 @@ active_sessions = 0
 
 def _pack(message: dict) -> bytes:
     return msgpack.packb(message, use_bin_type=True, use_single_float=True)
+
+
+# The backend's own health check (unmute/main_websocket.py's _get_health,
+# polled via the main service's /metrics) does a plain HTTP GET to
+# http://localhost:8090/api/build_info to see if STT is up — that's how
+# Kyutai's real moshi-server responds to it. This server only ever spoke
+# the websocket protocol, so that plain GET had no handler and fell through
+# to the library's default "not a websocket request" response: 426 Upgrade
+# Required. That's what was showing up in the log once per health check.
+#
+# process_request runs before the websocket handshake and lets us answer
+# ordinary HTTP requests directly. Anything for our real path passes
+# through (returning None keeps the normal websocket upgrade); anything
+# else — in practice just this health check — gets a plain 200 so the
+# backend's health check passes and stops logging a 426 for it.
+def _process_request(connection: ServerConnection, request: Request) -> Response | None:
+    path = request.path.split("?")[0]
+    if path == PATH:
+        return None  # real STT traffic: proceed with the websocket handshake
+    body = json.dumps({"build_id": "nemotron_stt"}).encode()
+    return Response(
+        200, "OK", Headers({"Content-Type": "application/json", "Content-Length": str(len(body))}), body
+    )
 
 
 async def handle(ws: ServerConnection) -> None:
@@ -108,7 +135,10 @@ async def handle(ws: ServerConnection) -> None:
 async def main() -> None:
     global MODEL
     MODEL = await asyncio.to_thread(NemotronModel, MODEL_NAME, CHUNK_MS)
-    async with serve(handle, HOST, PORT, max_size=None, ping_interval=20, ping_timeout=20):
+    async with serve(
+        handle, HOST, PORT, max_size=None, ping_interval=20, ping_timeout=20,
+        process_request=_process_request,
+    ):
         logger.info("Nemotron STT listening on ws://%s:%d%s", HOST, PORT, PATH)
         await asyncio.get_running_loop().create_future()
 
